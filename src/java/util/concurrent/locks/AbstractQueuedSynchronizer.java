@@ -384,15 +384,16 @@ public abstract class AbstractQueuedSynchronizer
         /** Marker to indicate a node is waiting in exclusive mode */
         static final Node EXCLUSIVE = null;
 
-        /** waitStatus value to indicate thread has cancelled */
+        /* 状态大于0，只有一种情况，那就是被取消了 */
+
+        /** 该状态表明当期线程已经被取消 */
         static final int CANCELLED =  1;
-        /** waitStatus value to indicate successor's thread needs unparking */
+        /** 该状态表明需要唤醒下一个线程 */
         static final int SIGNAL    = -1;
         /** waitStatus value to indicate thread is waiting on condition */
         static final int CONDITION = -2;
         /**
-         * waitStatus value to indicate the next acquireShared should
-         * unconditionally propagate
+         * waitStatus value to indicate the next acquireShared should unconditionally propagate
          */
         static final int PROPAGATE = -3;
 
@@ -519,12 +520,18 @@ public abstract class AbstractQueuedSynchronizer
      * initialization, it is modified only via method setHead.  Note:
      * If head exists, its waitStatus is guaranteed not to be
      * CANCELLED.
+     *
+     * 等待队列头指针，懒加载初始化，也就是第一次是 null
+     * head 值改变只能通过方法 {@link #setHead(Node)},并且规定如果头节点存在，那么它的 waitStatus 值不能为 CANCELLED
      */
     private transient volatile Node head;
 
     /**
      * Tail of the wait queue, lazily initialized.  Modified only via
      * method enq to add new wait node.
+     *
+     * 登台队列尾指针，懒加载初始化，也就是第一次是 null
+     * tail 值改变只能通过方法 {@link #enq(Node)}，也就是添加 node 到等待队列的时候
      */
     private transient volatile Node tail;
 
@@ -580,11 +587,15 @@ public abstract class AbstractQueuedSynchronizer
      * Inserts node into queue, initializing if necessary. See picture above.
      * @param node the node to insert
      * @return node's predecessor
+     *
+     * 死循环通过 cas 将参数 node 添加到阻塞线程队列尾部
+     *
      */
     private Node enq(final Node node) {
         for (;;) {
             Node t = tail;
-            if (t == null) { // Must initialize
+            if (t == null) {
+                /** 第一次添加的时候，头尾都是没有节点，所以为空，需要初始化 */
                 if (compareAndSetHead(new Node()))
                     tail = head;
             } else {
@@ -600,12 +611,17 @@ public abstract class AbstractQueuedSynchronizer
     /**
      * Creates and enqueues node for current thread and given mode.
      *
-     * @param mode Node.EXCLUSIVE for exclusive, Node.SHARED for shared
+     * @param mode Node.EXCLUSIVE for exclusive, Node.SHARED for shared 当前线程阻塞的模式，只有互斥或者共享两种
      * @return the new node
+     *
+     *
+     *
      */
     private Node addWaiter(Node mode) {
+        /** 将当前线程和指定的模式封装成一个 node 对象 */
         Node node = new Node(Thread.currentThread(), mode);
         // Try the fast path of enq; backup to full enq on failure
+        /** 这里采用快速尝试方式，直接将这个节点添加到队列尾部 */
         Node pred = tail;
         if (pred != null) {
             node.prev = pred;
@@ -614,6 +630,7 @@ public abstract class AbstractQueuedSynchronizer
                 return node;
             }
         }
+        /** 添加失败原因：1 tail 尾部为空，说明是第一次添加节点 node； 2 cas 操作失败，说明有线程此时在并发操作 */
         enq(node);
         return node;
     }
@@ -623,7 +640,8 @@ public abstract class AbstractQueuedSynchronizer
      * acquire methods.  Also nulls out unused fields for sake of GC
      * and to suppress unnecessary signals and traversals.
      *
-     * @param node the node
+     * 将指定的参数 node 设置为头节点
+     * 同时将头结点的线程和钱指针设置为 null
      */
     private void setHead(Node node) {
         head = node;
@@ -643,8 +661,9 @@ public abstract class AbstractQueuedSynchronizer
          * fails or if status is changed by waiting thread.
          */
         int ws = node.waitStatus;
-        if (ws < 0)
+        if (ws < 0) {
             compareAndSetWaitStatus(node, ws, 0);
+        }
 
         /*
          * Thread to unpark is held in successor, which is normally
@@ -792,15 +811,28 @@ public abstract class AbstractQueuedSynchronizer
      * @param pred node's predecessor holding status
      * @param node the node
      * @return {@code true} if thread should block
+     *
+     * 参数 pred 是参数 node 的前置节点
+     * 这个方法其实就是判断前置节点 pred 是否是 SIGNAL，如果是则 ture，否则返回 false
+     * true：表明参数 node 对应的线程应该被阻塞
+     * false：表明参数 node 对应的线程不应该被阻塞
+     *
      */
     private static boolean shouldParkAfterFailedAcquire(Node pred, Node node) {
         int ws = pred.waitStatus;
-        if (ws == Node.SIGNAL)
+        /** 如果已经是 SIGNAL，则直接返回 true */
+        if (ws == Node.SIGNAL) {
             /*
              * This node has already set status asking a release
              * to signal it, so it can safely park.
              */
             return true;
+        }
+        /**
+         * 如果是大于 0，那么说明被取消了，则通过死循环找到前一个节点，且该节点状态不是大于0
+         *
+         * 下面的 if-else 结束后都是返回 false
+         */
         if (ws > 0) {
             /*
              * Predecessor was cancelled. Skip over predecessors and
@@ -816,6 +848,7 @@ public abstract class AbstractQueuedSynchronizer
              * need a signal, but don't park yet.  Caller will need to
              * retry to make sure it cannot acquire before parking.
              */
+            /** 如果前一个 pred 节点的状态是小于等于0，则将状态改为 SIGNAL */
             compareAndSetWaitStatus(pred, ws, Node.SIGNAL);
         }
         return false;
@@ -834,7 +867,21 @@ public abstract class AbstractQueuedSynchronizer
      * @return {@code true} if interrupted
      */
     private final boolean parkAndCheckInterrupt() {
+
+        /**
+         * 1 执行这段代码，线程就会挂起，不会执行下面的 return 语句
+         * 2 被唤醒的方式：
+         *      1 LockSupport.unpark 唤醒当前线程
+         *      2 当期线程被调用了 .interrupt() 方法，需要注意的是，这种方式是不会抛出异常，而是正常执行下面流程
+         */
         LockSupport.park(this);
+
+        /**
+         * 执行这段代码，说明当前线程已经被唤醒
+         * 返回被唤醒的方式
+         *  true：说明是终端方式唤醒；
+         *  false：说明是 unpark 方式唤醒
+         */
         return Thread.interrupted();
     }
 
@@ -854,6 +901,14 @@ public abstract class AbstractQueuedSynchronizer
      * @param node the node
      * @param arg the acquire argument
      * @return {@code true} if interrupted while waiting
+     *
+     * 1 首先参数 node 已经是在等待队列中了
+     * 2 参数 arg 表示当前参数 node 这个线程需要申请的状态个数
+     * 3 这个方法就是线程真正阻塞的方法，除非获取到了锁，否则阻塞自己
+     * 4 true：表示当前线程阻塞过，并且唤醒的方式是调用线程 .interrupt() 方法
+     *   其余方式都是 false：包括线程没有阻塞，或者线程阻塞过但是通过 unpark 方式唤醒
+     *
+     *
      */
     final boolean acquireQueued(final Node node, int arg) {
         boolean failed = true;
@@ -861,19 +916,28 @@ public abstract class AbstractQueuedSynchronizer
             boolean interrupted = false;
             for (;;) {
                 final Node p = node.predecessor();
+                /**
+                 * 如果参数 node 的前一个节点是 head，并且尝试一次获取锁资源，
+                 * 如果都成功说明当前运行的线程已经获取到了锁，不需要阻塞自己了，所以将自己设置成头节点，并且设置相关属性为 null
+                 */
                 if (p == head && tryAcquire(arg)) {
                     setHead(node);
                     p.next = null; // help GC
                     failed = false;
                     return interrupted;
                 }
-                if (shouldParkAfterFailedAcquire(p, node) &&
-                    parkAndCheckInterrupt())
+                /**
+                 * 1 判断前一个节点状态是否是 SIGNAL，如果是返回 ture，其余情况都返回 false
+                 * 2 第一个方法返回 true，说明当前线程应该被 park 挂起，因为前一个 node 状态是 SIGNAL，会主动唤醒这个线程的
+                 */
+                if (shouldParkAfterFailedAcquire(p, node) && parkAndCheckInterrupt()) {
                     interrupted = true;
+                }
             }
         } finally {
-            if (failed)
+            if (failed) {
                 cancelAcquire(node);
+            }
         }
     }
 
@@ -1196,8 +1260,12 @@ public abstract class AbstractQueuedSynchronizer
      *        can represent anything you like.
      */
     public final void acquire(int arg) {
-        if (!tryAcquire(arg) &&
-            acquireQueued(addWaiter(Node.EXCLUSIVE), arg))
+        /**
+         * 1 先调用具体的子类 tryAcquire 方法来获取锁资源，如果获取成功，则没有后续操作了
+         * 2 如果获取失败，则调用 addWaiter 方法将当前线程以互斥模式添加到等待队列中
+         * 3 最后调用 acquireQueued 方法进行阻塞线程
+         */
+        if (!tryAcquire(arg) && acquireQueued(addWaiter(Node.EXCLUSIVE), arg))
             selfInterrupt();
     }
 
