@@ -1327,6 +1327,8 @@ public abstract class AbstractQueuedSynchronizer
      * @return {@code true} if synchronization is held exclusively;
      *         {@code false} otherwise
      * @throws UnsupportedOperationException if conditions are not supported
+     *
+     * todo
      */
     protected boolean isHeldExclusively() {
         throw new UnsupportedOperationException();
@@ -1881,14 +1883,18 @@ public abstract class AbstractQueuedSynchronizer
      * @return true if successfully transferred (else the node was cancelled before signal)
      *
      * 将节点从条件队列转移到同步队列
+     * true：转移成功
+     * false：转移失败
      */
     final boolean transferForSignal(Node node) {
         /*
          * If cannot change waitStatus, the node has been cancelled.
          */
         /** 将参数 node 节点等待状态改为0 */
-        if (!compareAndSetWaitStatus(node, Node.CONDITION, 0))
+        if (!compareAndSetWaitStatus(node, Node.CONDITION, 0)) {
+            /** cas节点状态错误，说明已经cancell了，直接返回false */
             return false;
+        }
 
         /*
          * Splice onto queue and try to set waitStatus of predecessor to
@@ -1940,6 +1946,9 @@ public abstract class AbstractQueuedSynchronizer
      * Cancels node and throws exception on failure.
      * @param node the condition node for this wait
      * @return previous sync state
+     *
+     *
+     *
      */
     final int fullyRelease(Node node) {
         boolean failed = true;
@@ -2055,9 +2064,9 @@ public abstract class AbstractQueuedSynchronizer
      */
     public class ConditionObject implements Condition, java.io.Serializable {
         private static final long serialVersionUID = 1173984872572414699L;
-        /** First node of condition queue. */
+        /** First node of condition queue. 首个等待节点 */
         private transient Node firstWaiter;
-        /** Last node of condition queue. */
+        /** Last node of condition queue.  最后一个等待节点 */
         private transient Node lastWaiter;
 
         /**
@@ -2070,19 +2079,26 @@ public abstract class AbstractQueuedSynchronizer
         /**
          * Adds a new waiter to wait queue.
          * @return its new wait node
+         *
+         * 将当前线程封装成 node 添加到条件队列中
          */
         private Node addConditionWaiter() {
             Node t = lastWaiter;
             // If lastWaiter is cancelled, clean out.
+            /** 清除cancell态的节点 */
             if (t != null && t.waitStatus != Node.CONDITION) {
                 unlinkCancelledWaiters();
+                /** t指向最后一个状态正确的节点 */
                 t = lastWaiter;
             }
+            /** 新建一个条件等待 node，添加到条件队列中 */
             Node node = new Node(Thread.currentThread(), Node.CONDITION);
-            if (t == null)
+            if (t == null) {
                 firstWaiter = node;
-            else
+            }
+            else {
                 t.nextWaiter = node;
+            }
             lastWaiter = node;
             return node;
         }
@@ -2091,20 +2107,29 @@ public abstract class AbstractQueuedSynchronizer
          * Removes and transfers nodes until hit non-cancelled one or
          * null. Split out from signal in part to encourage compilers
          * to inline the case of no waiters.
-         * @param first (non-null) the first node on condition queue
+         *
+         * 该方法只会在 {@link #ConditionObject()#signal} 中调用，并且参数就是 {@link #ConditionObject()#firstWaiter}
+         * 就是将参数节点 node 移动到同步队列中，并且在条件队列中删除
          */
         private void doSignal(Node first) {
             do {
-                if ( (firstWaiter = first.nextWaiter) == null)
+                if ((firstWaiter = first.nextWaiter) == null) {
                     lastWaiter = null;
+                }
                 first.nextWaiter = null;
-            } while (!transferForSignal(first) &&
-                    (first = firstWaiter) != null);
+            }
+            /**
+             * 1 从条件队列将节点转移到等待同步队列
+             * 2 如果转移失败，则默认开始转移条件队列中的下一个节点
+             */
+            while (!transferForSignal(first) && (first = firstWaiter) != null);
         }
 
         /**
          * Removes and transfers all nodes.
-         * @param first (non-null) the first node on condition queue
+         *
+         * 将条件队列中所有节点移动到同步等待队列中，并且删除所有条件队列
+         *
          */
         private void doSignalAll(Node first) {
             lastWaiter = firstWaiter = null;
@@ -2161,11 +2186,13 @@ public abstract class AbstractQueuedSynchronizer
          *         returns {@code false}
          */
         public final void signal() {
-            if (!isHeldExclusively())
+            if (!isHeldExclusively()) {
                 throw new IllegalMonitorStateException();
+            }
             Node first = firstWaiter;
-            if (first != null)
+            if (first != null) {
                 doSignal(first);
+            }
         }
 
         /**
@@ -2176,11 +2203,13 @@ public abstract class AbstractQueuedSynchronizer
          *         returns {@code false}
          */
         public final void signalAll() {
-            if (!isHeldExclusively())
+            if (!isHeldExclusively()) {
                 throw new IllegalMonitorStateException();
+            }
             Node first = firstWaiter;
-            if (first != null)
+            if (first != null) {
                 doSignalAll(first);
+            }
         }
 
         /**
@@ -2200,8 +2229,9 @@ public abstract class AbstractQueuedSynchronizer
             boolean interrupted = false;
             while (!isOnSyncQueue(node)) {
                 LockSupport.park(this);
-                if (Thread.interrupted())
+                if (Thread.interrupted()) {
                     interrupted = true;
+                }
             }
             if (acquireQueued(node, savedState) || interrupted)
                 selfInterrupt();
@@ -2256,22 +2286,35 @@ public abstract class AbstractQueuedSynchronizer
          * </ol>
          */
         public final void await() throws InterruptedException {
-            if (Thread.interrupted())
+            if (Thread.interrupted()) {
                 throw new InterruptedException();
+            }
+            /** 将当前线程封装成 Node 加入到等待队列尾部 */
             Node node = addConditionWaiter();
+            /** 释放锁 */
             int savedState = fullyRelease(node);
             int interruptMode = 0;
+            /**
+             * 1 判断当前节点是否已经在同步队列中，如果是则退出循环，如果不是就阻塞当前线程
+             * 2 其他线程如果发出了signal信号之后，会把等待队列的线程移入同步队列，此时就会退出循环，进入下面的重新获取锁的 acquireQueued
+             */
             while (!isOnSyncQueue(node)) {
                 LockSupport.park(this);
                 if ((interruptMode = checkInterruptWhileWaiting(node)) != 0)
                     break;
             }
-            if (acquireQueued(node, savedState) && interruptMode != THROW_IE)
+            /**
+             * 分支进入这里说明当前线程已经可以重新获取锁了，调用 acquireQueued 方法
+             */
+            if (acquireQueued(node, savedState) && interruptMode != THROW_IE) {
                 interruptMode = REINTERRUPT;
-            if (node.nextWaiter != null) // clean up if cancelled
+            }
+            if (node.nextWaiter != null) {
                 unlinkCancelledWaiters();
-            if (interruptMode != 0)
+            }
+            if (interruptMode != 0) {
                 reportInterruptAfterWait(interruptMode);
+            }
         }
 
         /**
@@ -2287,10 +2330,10 @@ public abstract class AbstractQueuedSynchronizer
          * <li> If interrupted while blocked in step 4, throw InterruptedException.
          * </ol>
          */
-        public final long awaitNanos(long nanosTimeout)
-                throws InterruptedException {
-            if (Thread.interrupted())
+        public final long awaitNanos(long nanosTimeout) throws InterruptedException {
+            if (Thread.interrupted()) {
                 throw new InterruptedException();
+            }
             Node node = addConditionWaiter();
             int savedState = fullyRelease(node);
             final long deadline = System.nanoTime() + nanosTimeout;
