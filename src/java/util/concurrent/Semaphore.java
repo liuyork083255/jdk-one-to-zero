@@ -153,6 +153,7 @@ import java.util.concurrent.locks.AbstractQueuedSynchronizer;
  * @since 1.5
  * @author Doug Lea
  */
+@SuppressWarnings("all")
 public class Semaphore implements java.io.Serializable {
     private static final long serialVersionUID = -3222578661600680210L;
     /** All mechanics via AbstractQueuedSynchronizer subclass */
@@ -176,11 +177,17 @@ public class Semaphore implements java.io.Serializable {
 
         final int nonfairTryAcquireShared(int acquires) {
             for (;;) {
+                /**
+                 * 可以观察到，返回值就是 remaining
+                 * 如果小于0：说明资源个数不足，获取失败
+                 * 如果等于0：说明剩余资源个数和本次请求的个数刚好相等，获取成功
+                 * 如果大于0：说明本次获取资源个数后还有剩余，获取成功
+                 */
                 int available = getState();
                 int remaining = available - acquires;
-                if (remaining < 0 ||
-                    compareAndSetState(available, remaining))
+                if (remaining < 0 || compareAndSetState(available, remaining)) {
                     return remaining;
+                }
             }
         }
 
@@ -188,10 +195,12 @@ public class Semaphore implements java.io.Serializable {
             for (;;) {
                 int current = getState();
                 int next = current + releases;
-                if (next < current) // overflow
+                if (next < current) {
                     throw new Error("Maximum permit count exceeded");
-                if (compareAndSetState(current, next))
+                }
+                if (compareAndSetState(current, next)) {
                     return true;
+                }
             }
         }
 
@@ -199,18 +208,21 @@ public class Semaphore implements java.io.Serializable {
             for (;;) {
                 int current = getState();
                 int next = current - reductions;
-                if (next > current) // underflow
+                if (next > current) {
                     throw new Error("Permit count underflow");
-                if (compareAndSetState(current, next))
+                }
+                if (compareAndSetState(current, next)) {
                     return;
+                }
             }
         }
 
         final int drainPermits() {
             for (;;) {
                 int current = getState();
-                if (current == 0 || compareAndSetState(current, 0))
+                if (current == 0 || compareAndSetState(current, 0)) {
                     return current;
+                }
             }
         }
     }
@@ -242,13 +254,21 @@ public class Semaphore implements java.io.Serializable {
 
         protected int tryAcquireShared(int acquires) {
             for (;;) {
-                if (hasQueuedPredecessors())
+                /** 公平策略保证，如果有前驱等待节点，则直接返回负数，表示获取失败 */
+                if (hasQueuedPredecessors()) {
                     return -1;
+                }
                 int available = getState();
+                /**
+                 * 可以观察到，返回值就是 remaining
+                 * 如果小于0：说明资源个数不足，获取失败
+                 * 如果等于0：说明剩余资源个数和本次请求的个数刚好相等，获取成功
+                 * 如果大于0：说明本次获取资源个数后还有剩余，获取成功
+                 */
                 int remaining = available - acquires;
-                if (remaining < 0 ||
-                    compareAndSetState(available, remaining))
+                if (remaining < 0 || compareAndSetState(available, remaining)) {
                     return remaining;
+                }
             }
         }
     }

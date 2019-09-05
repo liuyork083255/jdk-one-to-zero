@@ -148,11 +148,16 @@ public class ReentrantLock implements Lock, java.io.Serializable {
 
         protected final boolean tryRelease(int releases) {
             int c = getState() - releases;
-            if (Thread.currentThread() != getExclusiveOwnerThread())
+            /** 如果当前线程不是独占锁的线程，就抛出IllegalMonitorStateException异常 */
+            if (Thread.currentThread() != getExclusiveOwnerThread()) {
                 throw new IllegalMonitorStateException();
+            }
+            /** 标志是否可以释放锁 */
             boolean free = false;
+            /**  当新的锁的记录状态为0时，表示可以释放锁，因为有重入锁原因 */
             if (c == 0) {
                 free = true;
+                /** 设置独占锁的线程为null */
                 setExclusiveOwnerThread(null);
             }
             setState(c);
@@ -200,8 +205,9 @@ public class ReentrantLock implements Lock, java.io.Serializable {
         private static final long serialVersionUID = 7316153563782823691L;
 
         /**
-         * Performs lock.  Try immediate barge, backing up to normal
-         * acquire on failure.
+         * Performs lock.  Try immediate barge, backing up to normal acquire on failure.
+         *
+         * 非公平锁体现在 lock 方法，获取锁的时候直接进行一次抢占，不管同步等待队列中是否有线程
          */
         final void lock() {
             if (compareAndSetState(0, 1))
@@ -210,6 +216,11 @@ public class ReentrantLock implements Lock, java.io.Serializable {
                 acquire(1);
         }
 
+        /**
+         * 非公平锁
+         * @param acquires
+         * @return
+         */
         protected final boolean tryAcquire(int acquires) {
             return nonfairTryAcquire(acquires);
         }
@@ -226,15 +237,15 @@ public class ReentrantLock implements Lock, java.io.Serializable {
         }
 
         /**
-         * Fair version of tryAcquire.  Don't grant access unless
-         * recursive call or no waiters or is first.
+         * Fair version of tryAcquire.  Don't grant access unless recursive call or no waiters or is first.
+         * 公平锁体现在 hasQueuedPredecessors 方法处，这里进行了一次判断
+         * hasQueuedPredecessors 方法返回 true，说明等待线程队列中有一个线程在当前线程之前， 根据公平锁的规则，当前线程不能获取锁
          */
         protected final boolean tryAcquire(int acquires) {
             final Thread current = Thread.currentThread();
             int c = getState();
             if (c == 0) {
-                if (!hasQueuedPredecessors() &&
-                    compareAndSetState(0, acquires)) {
+                if (!hasQueuedPredecessors() && compareAndSetState(0, acquires)) {
                     setExclusiveOwnerThread(current);
                     return true;
                 }

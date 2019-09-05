@@ -212,6 +212,7 @@ import java.util.Collection;
  * @since 1.5
  * @author Doug Lea
  */
+@SuppressWarnings("all")
 public class ReentrantReadWriteLock
         implements ReadWriteLock, java.io.Serializable {
     private static final long serialVersionUID = -6992448646407690164L;
