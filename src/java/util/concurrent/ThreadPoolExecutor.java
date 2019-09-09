@@ -320,6 +320,7 @@ import java.util.*;
  * @since 1.5
  * @author Doug Lea
  */
+@SuppressWarnings("all")
 public class ThreadPoolExecutor extends AbstractExecutorService {
     /**
      * The main pool control state, ctl, is an atomic integer packing
@@ -378,20 +379,57 @@ public class ThreadPoolExecutor extends AbstractExecutorService {
      * that workerCount is 0 (which sometimes entails a recheck -- see
      * below).
      */
+
+    /** 记录线程池状态和线程数量（总共32位，前三位表示线程池状态，后29位表示线程数量） */
     private final AtomicInteger ctl = new AtomicInteger(ctlOf(RUNNING, 0));
+
+    /** 线程数量统计位数29  Integer.SIZE=32 */
     private static final int COUNT_BITS = Integer.SIZE - 3;
+    /** 容量 000 11111111111111111111111111111 */
     private static final int CAPACITY   = (1 << COUNT_BITS) - 1;
 
     // runState is stored in the high-order bits
+    /**
+     * 运行中 111 00000000000000000000000000000
+     * 接受新任务并且处理阻塞队列里的任务
+     */
     private static final int RUNNING    = -1 << COUNT_BITS;
+    /**
+     * 关闭 000 00000000000000000000000000000
+     * 拒绝新任务但是处理阻塞队列里的任务
+     */
     private static final int SHUTDOWN   =  0 << COUNT_BITS;
+    /**
+     * 停止 001 00000000000000000000000000000
+     * 拒绝新任务并且抛弃阻塞队列里的任务同时会中断正在处理的任务
+     */
     private static final int STOP       =  1 << COUNT_BITS;
+    /**
+     * 整理 010 00000000000000000000000000000
+     * 所有任务都执行完（包含阻塞队列里面任务）当前线程池活动线程为0，将要调用 {@link #terminated} 方法
+     */
     private static final int TIDYING    =  2 << COUNT_BITS;
+    /**
+     * 终止 011 00000000000000000000000000000
+     * 终止状态。{@link #terminated} 方法调用完成以后的状态
+     */
     private static final int TERMINATED =  3 << COUNT_BITS;
 
     // Packing and unpacking ctl
+
+    /**
+     * ~ 各位取反
+     * | 各位对其，或运算，有 1 则 1
+     * & 各位对其，与运算，全为 1 则为 1
+     * ^ 各位对其，异或运算，不同则为 1
+     */
+
+    /** 获取运行状态（获取前3位） */
     private static int runStateOf(int c)     { return c & ~CAPACITY; }
+    /** 获取线程个数（获取后29位） */
     private static int workerCountOf(int c)  { return c & CAPACITY; }
+
+
     private static int ctlOf(int rs, int wc) { return rs | wc; }
 
     /*
@@ -444,6 +482,9 @@ public class ThreadPoolExecutor extends AbstractExecutorService {
      * queues such as DelayQueues for which poll() is allowed to
      * return null even if it may later return non-null when delays
      * expire.
+     *
+     * 用于保存任务队列 queue
+     *
      */
     private final BlockingQueue<Runnable> workQueue;
 
@@ -465,6 +506,9 @@ public class ThreadPoolExecutor extends AbstractExecutorService {
     /**
      * Set containing all worker threads in pool. Accessed only when
      * holding mainLock.
+     *
+     * 用于保存线程 worker 的 set 集合
+     *
      */
     private final HashSet<Worker> workers = new HashSet<Worker>();
 
@@ -592,9 +636,7 @@ public class ThreadPoolExecutor extends AbstractExecutorService {
      * state to a negative value, and clear it upon start (in
      * runWorker).
      */
-    private final class Worker
-        extends AbstractQueuedSynchronizer
-        implements Runnable
+    private final class Worker extends AbstractQueuedSynchronizer implements Runnable
     {
         /**
          * This class will never be serialized, but we provide a
@@ -905,16 +947,13 @@ public class ThreadPoolExecutor extends AbstractExecutorService {
             int rs = runStateOf(c);
 
             // Check if queue empty only if necessary.
-            if (rs >= SHUTDOWN &&
-                ! (rs == SHUTDOWN &&
-                   firstTask == null &&
-                   ! workQueue.isEmpty()))
+            if (rs >= SHUTDOWN && !(rs == SHUTDOWN && firstTask == null && !workQueue.isEmpty()))
                 return false;
 
             for (;;) {
+                /** 获取线程个数 */
                 int wc = workerCountOf(c);
-                if (wc >= CAPACITY ||
-                    wc >= (core ? corePoolSize : maximumPoolSize))
+                if (wc >= CAPACITY || wc >= (core ? corePoolSize : maximumPoolSize))
                     return false;
                 if (compareAndIncrementWorkerCount(c))
                     break retry;
@@ -1310,13 +1349,12 @@ public class ThreadPoolExecutor extends AbstractExecutorService {
         if (corePoolSize < 0 ||
             maximumPoolSize <= 0 ||
             maximumPoolSize < corePoolSize ||
-            keepAliveTime < 0)
+            keepAliveTime < 0) {
             throw new IllegalArgumentException();
+        }
         if (workQueue == null || threadFactory == null || handler == null)
             throw new NullPointerException();
-        this.acc = System.getSecurityManager() == null ?
-                null :
-                AccessController.getContext();
+        this.acc = System.getSecurityManager() == null ? null : AccessController.getContext();
         this.corePoolSize = corePoolSize;
         this.maximumPoolSize = maximumPoolSize;
         this.workQueue = workQueue;
@@ -1363,20 +1401,40 @@ public class ThreadPoolExecutor extends AbstractExecutorService {
          * and so reject the task.
          */
         int c = ctl.get();
+        /** 判断线程个数是否小于 {@link #corePoolSize} */
         if (workerCountOf(c) < corePoolSize) {
-            if (addWorker(command, true))
+            /**
+             * 如果小于则直接新建一个线程来执行这个任务
+             * 任务添加成功则直接返回，如果失败继续下面流程
+             */
+            if (addWorker(command, true)) {
                 return;
+            }
             c = ctl.get();
         }
+
+        /**
+         * 如果线程池处于RUNNING状态，则添加任务到阻塞队列
+         * 添加成功，说明队列任务没有满，如果满了肯定添加失败，就会创建 max 线程来执行这段代码
+         */
         if (isRunning(c) && workQueue.offer(command)) {
+            /** 二次检查 */
             int recheck = ctl.get();
-            if (! isRunning(recheck) && remove(command))
+            /** 如果当前线程池状态不是 RUNNING 则从队列删除任务，并执行拒绝策略 */
+            if (!isRunning(recheck) && remove(command)) {
                 reject(command);
-            else if (workerCountOf(recheck) == 0)
+            }
+            /** 否者如果当前线程池线程空，则添加一个线程 */
+            else if (workerCountOf(recheck) == 0) {
                 addWorker(null, false);
+            }
         }
-        else if (!addWorker(command, false))
+        /**
+         * 新增线程，新增失败则执行拒绝策略
+         */
+        else if (!addWorker(command, false)) {
             reject(command);
+        }
     }
 
     /**
